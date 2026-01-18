@@ -18,7 +18,7 @@ from mcap.records import (
 )
 from mcap.reader import SeekingReader
 from mcap.stream_reader import StreamReader
-from mcap.writer import CompressionType, IndexType, Writer, WriterOptions
+from mcap.writer import CompressionType, IndexType, Writer
 
 
 def test_append_mode():

@@ -2,7 +2,6 @@ import io
 import struct
 import zlib
 from collections import OrderedDict, defaultdict
-from dataclasses import dataclass
 from enum import Enum, Flag, auto
 from io import BufferedWriter, RawIOBase
 from typing import IO, Any, Dict, List, Optional, OrderedDict, Union
@@ -62,20 +61,6 @@ class IndexType(Flag):
     MESSAGE = auto()
     METADATA = auto()
     ALL = ATTACHMENT | CHUNK | MESSAGE | METADATA
-
-
-@dataclass
-class WriterOptions:
-    chunk_size: int = 1024 * 1024
-    compression: CompressionType = CompressionType.ZSTD
-    index_types: IndexType = IndexType.ALL
-    repeat_channels: bool = True
-    repeat_schemas: bool = True
-    use_chunking: bool = True
-    use_statistics: bool = True
-    use_summary_offsets: bool = True
-    enable_crcs: bool = True
-    enable_data_crcs: bool = False
 
 
 class Writer:
@@ -258,15 +243,15 @@ class Writer:
         self.__flush()
 
     @classmethod
-    def open_append(
-        cls, path: str, options: Optional[WriterOptions] = None
-    ) -> "Writer":
+    def open_append(cls, path: str, **kwargs) -> "Writer":
         """
         Initializes a new Writer for appending to an existing MCAP file.
         The existing file must be indexed.
+
+        Accepts the same keyword arguments as Writer.__init__ (chunk_size,
+        compression, index_types, etc.), except for enable_data_crcs which
+        is automatically inherited from the existing file.
         """
-        if options is None:
-            options = WriterOptions()
         stream = open(path, "r+b")
         # Given: An existing MCAP file path
         # When: Initializing for append
@@ -296,19 +281,10 @@ class Writer:
         stream.seek(data_end_offset + 1 + 8)
         data_end = DataEnd.read(ReadDataStream(stream, calculate_crc=False))
 
-        writer = cls(
-            stream,
-            chunk_size=options.chunk_size,
-            compression=options.compression,
-            index_types=options.index_types,
-            repeat_channels=options.repeat_channels,
-            repeat_schemas=options.repeat_schemas,
-            use_chunking=options.use_chunking,
-            use_statistics=options.use_statistics,
-            use_summary_offsets=options.use_summary_offsets,
-            enable_crcs=options.enable_crcs,
-            enable_data_crcs=data_end.data_section_crc != 0,
-        )
+        # Override enable_data_crcs based on existing file
+        kwargs["enable_data_crcs"] = data_end.data_section_crc != 0
+
+        writer = cls(stream, **kwargs)
         writer.__append_mode = True
         writer.__data_section_crc = data_end.data_section_crc
         writer.__schemas = OrderedDict(summary.schemas)
@@ -467,12 +443,12 @@ class Writer:
         metadata: Dict[str, str] = {},
     ) -> int:
         """
-        Registers a new message channel. Returns to numeric id of to new channel.
+        Registers a new message channel. Returns the numeric id of the new channel.
 
         :param schema_id: The schema for messages on this channel. A schema_id of 0 indicates there
             is no schema for this channel.
         :param topic: The channel topic.
-        :param message_encoding: Encoding for messages on this channel. See to list of well-known
+        :param message_encoding: Encoding for messages on this channel. See the list of well-known
             message encodings for common values.
         :param metadata: Metadata about this channel.
         """
@@ -503,15 +479,6 @@ class Writer:
             schema_id=schema_id,
             metadata=metadata,
         )
-        if channel_id in self.__channels and self.__append_mode:
-            existing = self.__channels[channel_id]
-            if not self.__channel_equals(existing, channel):
-                raise ValueError(
-                    f"Channel record for id {channel_id} (topic: {channel.topic}) "
-                    "differs from previous channel record of the same id."
-                )
-            return channel_id
-
         self.__channels[channel_id] = channel
         self.__statistics.channel_count += 1
         if self.__chunk_builder:
@@ -548,12 +515,6 @@ class Writer:
 
         schema_id = len(self.__schemas) + 1
         schema = Schema(id=schema_id, data=data, encoding=encoding, name=name)
-        if schema_id in self.__schemas and self.__append_mode:
-            existing = self.__schemas[schema_id]
-            if not self.__schema_equals(existing, schema):
-                raise ValueError(f"Schema id {schema_id} conflicts: existing differs")
-            return schema_id
-
         self.__schemas[schema_id] = schema
         self.__statistics.schema_count += 1
         if self.__chunk_builder:
@@ -579,21 +540,6 @@ class Writer:
             self.__data_section_crc = zlib.crc32(MCAP0_MAGIC, self.__data_section_crc)
         Header(profile, library).write(self.__record_builder)
         self.__flush()
-
-    def __channel_equals(self, existing: Channel, incoming: Channel) -> bool:
-        return (
-            existing.topic == incoming.topic
-            and existing.message_encoding == incoming.message_encoding
-            and existing.schema_id == incoming.schema_id
-            and existing.metadata == incoming.metadata
-        )
-
-    def __schema_equals(self, existing: Schema, incoming: Schema) -> bool:
-        return (
-            existing.name == incoming.name
-            and existing.encoding == incoming.encoding
-            and existing.data == incoming.data
-        )
 
     def __flush(self):
         data = self.__record_builder.end()
@@ -668,4 +614,4 @@ class Writer:
             self.__finalize_chunk()
 
 
-__all__ = ["CompressionType", "IndexType", "Writer", "WriterOptions"]
+__all__ = ["CompressionType", "IndexType", "Writer"]
